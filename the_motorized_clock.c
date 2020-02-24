@@ -77,8 +77,16 @@
 #include <pic18f45k22.h>
 #define _XTAL_FREQ 8000000
 
+
+#define EN LATEbits.LATE2
+#define RW LATEbits.LATE1
+#define RS LATEbits.LATE0
+
 void stringToUSB(uint8_t*);
 void charToUSB(uint8_t);
+void LCDCommand(uint8_t);
+void LCDData(uint8_t);
+void writeToLCD(uint8_t* p, uint8_t);
 
 void main(void) {
     
@@ -104,11 +112,24 @@ void main(void) {
     BAUDCON1bits.BRG16 = 0;            //8-bit baud rate generator
     SPBRG1 = 12;                       //baud rate = 9600
     
+    //LCD Configuration
+    TRISD = 0;                         //PORTD as an output
+    TRISE = 0;                         //PORTE as an output
+    
+    EN = 0;  
+    __delay_ms(100);
+    LCDCommand(0x38);                   //LCD 2 lines, 5x7 matrix
+    __delay_ms(100);
+    LCDCommand(0x0C);                   //display on, cursor off
+    __delay_ms(5);
+       
+    writeToLCD((uint8_t*)"The Motor Clock ", 0x80);
     
     while(1)
     {
-       __delay_ms(2000);
-       stringToUSB((uint8_t*)"Hello Motor\r\n");
+//       __delay_ms(2000);
+//       stringToUSB((uint8_t*)"Hello Motor\r\n");
+        
     }
     
     return;
@@ -125,4 +146,35 @@ void charToUSB(uint8_t chtr)
 {
          while(!PIR1bits.TX1IF);        
          TXREG1 = chtr;
+}
+
+void LCDCommand(uint8_t cmd)
+{
+    LATD = cmd;
+    RS = 0;
+    RW = 0;
+    EN = 1;
+    __delay_ms(1);
+    EN = 0;
+}
+
+void LCDData(uint8_t cmd)
+{
+    LATD = cmd;
+    RS = 1;
+    RW = 0;
+    EN = 1;
+    __delay_ms(1);
+    EN = 0;
+}
+
+void writeToLCD(uint8_t* p, uint8_t pos)
+{
+     LCDCommand(pos);
+     __delay_ms(5);
+     while(*p)
+     {
+           LCDData(*p++);
+           __delay_ms(5);
+     }
 }
