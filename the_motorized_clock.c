@@ -93,27 +93,65 @@
 #define NOT_LAST_BYTE 0
 #define LAST_BYTE 1
 
+typedef enum{   
+    HR_SETTING = 0,
+    MIN_SETTING = 1,
+    SEC_SETTING = 2,   
+    NOT_DEFINED = 3,
+    NOT_SETTING = 4,
+}clk_state;
+
+typedef enum{   
+    HR_POS = 1,
+    MIN_POS = 4,
+    SEC_POS = 7,   
+}cursor_pos;
+
+//LCD Functions
 void stringToUSB(uint8_t*);
 void charToUSB(uint8_t);
 void LCDCommand(uint8_t);
 void LCDData(uint8_t);
 void writeToLCD(uint8_t* p, uint8_t);
+
+//I2C Functions
 void startI2C(void);
 void repeatStartI2C(void);
 void writeInitI2C(void);
 void readInitI2C(void);
-void writeByteI2C(uint8_t);
-uint8_t readByteI2C(uint8_t);
 void stopI2C(void);
-void writeToDS3231Reg(uint8_t, uint8_t);
-uint8_t readFromDS3231Reg(uint8_t);
+void writeByteI2C(uint8_t);
+void readByteI2C(uint8_t*, uint8_t);
+
+//RTC Clock Functions
+void writeToRTC(uint8_t*, uint8_t, uint8_t);
+void writeSingleByteToRTC(uint8_t*);
+void writeMultipleByteToRTC(uint8_t*, uint8_t);
+void readFromRTC(uint8_t*, uint8_t, uint8_t);
+void readSingleByteFromRTC(uint8_t*);
+void readMultipleByteFromRTC(uint8_t*, uint8_t);
 void requestTime(void);
 void displayTime(void);
+void displayFormatting(uint8_t*);
 
-uint8_t time[9]={0x30, 0x30, 0x3A, 0x30, 0x30, 0x3A, 0x30, 0x30, '\0'};
+//Clock Display Functions
+void moveCursor(uint8_t);
+void displayCursor(void);
+void removeCursor(void);
+void digitUp(void);
+void digitDown(void);
 
-uint8_t tempi __at(0x050);
+uint8_t time[4]={0x00, 0x00, 0x00, '\0'};
+uint8_t display[9]={0x00, 0x00, 0x3A, 0x00, 0x00, 0x3A, 0x00, 0x00, '\0'};
+uint8_t clk_reg_adr[3]={CLK_HR_ADR, CLK_MIN_ADR, CLK_SEC_ADR};
+uint8_t cursor_positions[3]={HR_POS, MIN_POS, SEC_POS};
 
+
+uint8_t low_nibble __at(0x050);
+uint8_t high_nibble __at(0x060);
+
+clk_state state = NOT_SETTING;
+        
 void main(void) {
     
     //Oscillator configuration
@@ -156,31 +194,51 @@ void main(void) {
     ANSELCbits.ANSC4 = 0;              //digital enabled
     TRISCbits.RC3 = 1;
     TRISCbits.RC4 = 1;
-    SSP1CON1bits.SSPM = 0b1000;             // I2C Master mode, clock = FOSC / (4 * (SSPxADD+1))
-    SSP1ADD = 0x09;                         // i2c at 200 kHz
-    SSP1CON1bits.SSPEN = 1;                 //enables i2c pins
+    SSP1CON1bits.SSPM = 0b1000;        // I2C Master mode, clock = FOSC / (4 * (SSPxADD+1))
+    SSP1ADD = 0x09;                    // i2c at 200 kHz
+    SSP1CON1bits.SSPEN = 1;            //enables i2c pins
     
-    __delay_ms(5000);
-   
     //1 Hz SQW Pin Configuration
     TRISCbits.RC0 = 1;
     INTCONbits.GIE = 1;                //general interrupt enabled
-    INTCONbits.PEIE = 1;   
+    INTCONbits.PEIE = 1;               //peripheral interrupt enabled
     T3CONbits.T3SOSCEN = 0;            //secondary oscillator disabled
     T3CONbits.TMR3CS = 0b10;           //T3CKI pin enabled
     T3CONbits.T3CKPS1 = 0b00;          //prescaler = 0
-
     TMR3 = 0xFFFF;
-              
-    writeToDS3231Reg(0x00, CTRL_REG_ADR);
-    writeToDS3231Reg(0x40, CLK_SEC_ADR);
-    writeToDS3231Reg(0x08, CLK_MIN_ADR);
-    writeToDS3231Reg(0x19, CLK_HR_ADR);
+     
+    //Set, Up and Down Buttons Configuration
+
+    TRISBbits.RB0 = 1;                 //INT1 as input
+    TRISBbits.RB1 = 1;                 //INT1 as input
+    TRISBbits.RB2 = 1;                 //INT1 as input
+    ANSELBbits.ANSB0 = 0;
+    ANSELBbits.ANSB1 = 0;
+    ANSELBbits.ANSB2 = 0;
+    
+    INTCON2bits.INTEDG0 = 0;                //interrupt on falling edge
+    INTCON2bits.INTEDG1 = 0;
+    INTCON2bits.INTEDG2 = 0;
+    INTCON2bits.NOT_RBPU = 1;               //disable all weak pull-ups
+    INTCONbits.INT0IF = 0;                  //interrupt flag on RB0 reset
+    INTCON3bits.INT1IF = 0;                 //interrupt flag on RB1 reset
+    INTCON3bits.INT2IF = 0;                 //interrupt flag on RB2 reset
+    INTCONbits.INT0IE = 1;                  //interrupt on RB0 enabled
+    INTCON3bits.INT1IE = 1;                 //interrupt on RB1 enabled
+    INTCON3bits.INT2IE = 1;                 //interrupt on RB2 enabled
+    
+    uint8_t reg = 0x00;
+    uint8_t init = 0x09;
+    writeToRTC(&reg, CTRL_REG_ADR, 1);
+    writeToRTC(&init, CLK_SEC_ADR, 1);
+    writeToRTC(&init, CLK_MIN_ADR, 1);
+    writeToRTC(&init, CLK_HR_ADR, 1);
     
     PIR2bits.TMR3IF = 0;
     PIE2bits.TMR3IE = 1;               //counter 1 interrupt enabled
     T3CONbits.TMR3ON = 1;
     
+    __delay_ms(1000);
     while(1)
     {
 //       __delay_ms(2000);
@@ -197,100 +255,246 @@ void main(void) {
 void __interrupt(low_priority) myTimer(void)
 {
 
-     if(PIR2bits.TMR3IF)                   
-     {    
-         requestTime();        
-         displayTime();
-         TMR3 = 0xFFFF;
-         PIR2bits.TMR3IF = 0;
-     }
+    if(PIR2bits.TMR3IF)                   
+    {    
+        requestTime();        
+        displayTime();
+        TMR3 = 0xFFFF;
+        PIR2bits.TMR3IF = 0;
+    }
+     
+    if(INTCONbits.INT0IF)                          
+    {               
+        if(state == NOT_SETTING)
+        {
+           T3CONbits.TMR3ON = 0;                  
+           state = HR_SETTING;
+           displayCursor();
+           moveCursor(cursor_positions[state]);
+        }        
+        else
+        {          
+           writeToRTC(&time[clk_reg_adr[state]], clk_reg_adr[state], 1);
+           state += 1;                            
+           if(state!=NOT_DEFINED)                          
+           {
+               moveCursor(cursor_positions[state]);          
+           }
+           else
+           {
+               removeCursor();
+               state = NOT_SETTING;
+               TMR3 = 0xFFFF;
+               PIR2bits.TMR3IF = 0;
+               T3CONbits.TMR3ON = 1;             
+           }                                
+        }             
+        INTCONbits.INT0IF = 0;
+    }
+    
+    //up
+    if(INTCON3bits.INT1IF)                        
+    {
+        if(state!=NOT_SETTING)               
+        {
+           digitUp();
+           displayTime();
+           moveCursor(cursor_positions[state]);          
+        }
+        INTCON3bits.INT1IF = 0;       
+    }
+    
+    //down
+    if(INTCON3bits.INT2IF)                        
+    {
+        if(state!=NOT_SETTING)               
+        {
+           digitDown();
+           displayTime();
+           moveCursor(cursor_positions[state]);          
+        }
+        INTCON3bits.INT2IF = 0;       
+    }
+     
+   
       
 }
 
-
-void writeToDS3231Reg(uint8_t byte, uint8_t adr)
+void digitDown()
 {
-    startI2C();                                       //start condition
-    writeInitI2C();                                   //write slave to transmit address
-    writeByteI2C(adr);                                //write address of register to be written to
-    writeByteI2C(byte);                               //write the byte into the buffer
-    stopI2C();                                        //stop condition
+    low_nibble = time[clk_reg_adr[state]] & 0x0F;
+    high_nibble = (time[clk_reg_adr[state]] & 0xF0) >> 4;
+    
+    low_nibble--;
+    if(state==HR_SETTING)
+    {
+        if(low_nibble == 0xFF && high_nibble == 0x00)
+        {
+            low_nibble = 0x03;
+            high_nibble = 0x02;
+        }
+        if(low_nibble == 0xFF && high_nibble > 0x00)
+        {
+            low_nibble = 0x09;
+            high_nibble--;
+        }
+    }
+    else
+    {
+        if(low_nibble == 0xFF)
+        {
+            low_nibble = 0x09;
+            high_nibble--;
+            if(high_nibble == 0xFF)
+                high_nibble = 0x05;  
+        }
+    }   
+    time[clk_reg_adr[state]] =  high_nibble << 4 | low_nibble;
 }
 
-uint8_t readFromDS3231Reg(uint8_t adr)
+
+void digitUp()
 {
-    uint8_t reading;
+    low_nibble = time[clk_reg_adr[state]] & 0x0F;
+    high_nibble = (time[clk_reg_adr[state]] & 0xF0) >> 4;
     
+    low_nibble++;
+    if(state==HR_SETTING)
+    {
+        if(high_nibble < 0x02 && low_nibble == 0x0A)
+        {
+            low_nibble = 0x00;
+            high_nibble++;
+        }  
+        if(high_nibble == 0x02 && low_nibble == 0x04)
+        {
+            low_nibble = 0x00;
+            high_nibble = 0x00;      
+        }
+    }
+    else
+    {
+        if(low_nibble== 0x0A)
+        {
+            low_nibble = 0x00;
+            high_nibble++;
+            if(high_nibble==0x06)
+                high_nibble=0x00;
+        }  
+    }   
+    time[clk_reg_adr[state]] =  high_nibble << 4 | low_nibble;
+}
+
+void moveCursor(uint8_t state)
+{
+    LCDCommand(0xC0 | state);
+}
+
+void displayCursor()
+{
+    LCDCommand(0x0E);
+}
+
+void removeCursor()
+{
+    LCDCommand(0x0C);
+}
+
+void requestTime(void)
+{    
+    readFromRTC(&time[0], CLK_SEC_ADR, 3);                                            
+}
+
+void displayFormatting(uint8_t* data)
+{
+    uint8_t temp;
+    for(int8_t i = 7; i>0; i-=3)
+    {
+        temp = *data++;
+        display[i] = 0x30 | (temp & 0x0F);                
+        display[i-1] = 0x30 | temp>>4;       
+    }        
+}
+void displayTime(void)
+{
+    displayFormatting(&time[0]);
+    writeToLCD(&display[0], 0xC0);
+}
+
+
+void readFromRTC(uint8_t* byte, uint8_t adr, uint8_t msg_lgth)
+{  
     startI2C();                                        //start condition                                 
     writeInitI2C();                                       //write slave to transmit address
     writeByteI2C(adr);                                //write address of register to be read, i.e. seconds address
     repeatStartI2C();                                  //repeat start condition 
     readInitI2C();                                        //tell the slave we wanna read from it
-    reading = readByteI2C(LAST_BYTE);
+    if(msg_lgth>1)
+        readMultipleByteFromRTC(byte, msg_lgth);
+    else
+        readSingleByteFromRTC(byte);    
     stopI2C(); 
-
-    return reading;
 }
 
-void requestTime(void)
-{  
-    startI2C();                                        //start condition                                 
-    writeInitI2C();                                       //write slave to transmit address
-    writeByteI2C(CLK_SEC_ADR);                                //write address of register to be read, i.e. seconds address
-    repeatStartI2C();                                  //repeat start condition 
-    readInitI2C();                                        //tell the slave we wanna read from it
-    for(int i = 7; i>0; i-=3)                          //save time in time array hours/min/sec
-    {                                                  
-        uint8_t temp;
-        temp = (i==1)? readByteI2C(LAST_BYTE): readByteI2C(NOT_LAST_BYTE);
-   //     temp = (i==1)? temp & 0x3F  : temp;            //if hour register clear the AM/PM format
-        time[i] = 0x30 | (temp & 0x0F);                //in time array storage of different digits
-        time[i-1] = 0x30 | temp>>4;
-    }
-
-    stopI2C();                                         //initiate a stop condition
-}
-
-
-void displayTime(void)
+void readSingleByteFromRTC(uint8_t* byte)
 {
-     writeToLCD(&time[0], 0xC0);
+    readByteI2C(byte, LAST_BYTE);                               //write the byte into the buffer                                      //stop condition
 }
 
-uint8_t readByteI2C(uint8_t last)
+void readMultipleByteFromRTC(uint8_t* byte, uint8_t msg_lgth)
 {
-    uint8_t recbyte; 
-    
+    uint8_t last_byte;
+    for(uint8_t i=0; i<msg_lgth; i++)
+    {
+        last_byte = (i == msg_lgth-1)? LAST_BYTE : NOT_LAST_BYTE;
+        readByteI2C(byte++, last_byte);                       //write the byte into the buffer            
+    }        
+}
+
+void readByteI2C(uint8_t* recbyte, uint8_t last)
+{ 
     SSP1CON2bits.RCEN = 1;             //set receive enable bit to indicate a reception operation
     while(!PIR1bits.SSP1IF);           //wait for MSSP interrupt flag bit to indicate one byte received
     PIR1bits.SSP1IF = 0;               //reset MSSP interrupt flag bit
-    recbyte = SSP1BUF;  
+    *recbyte = SSP1BUF;  
       
     SSP1CON2bits.ACKDT = last ? 1 : 0;
     SSP1CON2bits.ACKEN = 1;            //ACK initiation
     while(!PIR1bits.SSP1IF);
     PIR1bits.SSP1IF = 0;
-    
-    return recbyte;
 }
 
-void readInitI2C(void)
-{   
-    SSP1BUF = SLAVE_ADR_READ ;          //slave address to receive from
+void writeToRTC(uint8_t* byte, uint8_t adr, uint8_t msg_lgth)
+{
+    startI2C();                                       //start condition
+    writeInitI2C();                                   //write slave to transmit address
+    writeByteI2C(adr);                                //write address of register to be written to
+    if(msg_lgth>1)
+        writeMultipleByteToRTC(byte, msg_lgth);
+    else
+        writeSingleByteToRTC(byte);
+    stopI2C();                                        //stop condition
+}
+
+void writeSingleByteToRTC(uint8_t* byte)
+{
+    writeByteI2C(*byte);                               //write the byte into the buffer                                      //stop condition
+}
+
+void writeMultipleByteToRTC(uint8_t* byte, uint8_t msg_lgth)
+{
+    for(uint8_t i=0; i<msg_lgth; i++)
+         writeByteI2C(*byte++);                       //write the byte into the buffer
+}
+
+void writeByteI2C(uint8_t byte)
+{
+    
+    SSP1BUF = byte;                     //slave address to transmit
     while(!PIR1bits.SSP1IF);            //MSSP interrupt flag bit set by hardware after 9th clock
     PIR1bits.SSP1IF = 0;                //reset MSSP interrupt flag bit
     if(SSP1CON2bits.ACKSTAT)
         writeToLCD((uint8_t*)"Acknowledgement failed", 0xC0);
-}
-
-void stopI2C(void)
-{   
-    SSP1STATbits.P = 0;                 //reset stop bit
-    SSP1CON2bits.PEN = 1;               //initiate a stop condition
-    while(!PIR1bits.SSP1IF);            //MSSP interrupt flag bit set by hardware following a stop condition completion 
-    PIR1bits.SSP1IF = 0;                //clear MSSP interrupt flag bit     
-    if(!SSP1STATbits.P)
-        writeToLCD((uint8_t*)"Stop condition error", 0xC0);  
 }
 
 void startI2C(void)
@@ -313,6 +517,16 @@ void repeatStartI2C(void)
         writeToLCD((uint8_t*)"Restart condition error", 0xC0);
 }
 
+void stopI2C(void)
+{   
+    SSP1STATbits.P = 0;                 //reset stop bit
+    SSP1CON2bits.PEN = 1;               //initiate a stop condition
+    while(!PIR1bits.SSP1IF);            //MSSP interrupt flag bit set by hardware following a stop condition completion 
+    PIR1bits.SSP1IF = 0;                //clear MSSP interrupt flag bit     
+    if(!SSP1STATbits.P)
+        writeToLCD((uint8_t*)"Stop condition error", 0xC0);  
+}
+
 void writeInitI2C(void)
 {   
     SSP1BUF = SLAVE_ADR_WRITE;          //slave address to transmit
@@ -322,10 +536,9 @@ void writeInitI2C(void)
         writeToLCD((uint8_t*)"Acknowledgement failed", 0xC0);
 }
 
-void writeByteI2C(uint8_t byte)
-{
-    
-    SSP1BUF = byte;                     //slave address to transmit
+void readInitI2C(void)
+{   
+    SSP1BUF = SLAVE_ADR_READ ;          //slave address to receive from
     while(!PIR1bits.SSP1IF);            //MSSP interrupt flag bit set by hardware after 9th clock
     PIR1bits.SSP1IF = 0;                //reset MSSP interrupt flag bit
     if(SSP1CON2bits.ACKSTAT)
@@ -340,8 +553,8 @@ void stringToUSB(uint8_t* strg)
 
 void charToUSB(uint8_t chtr)
 {
-         while(!PIR1bits.TX1IF);        
-         TXREG1 = chtr;
+    while(!PIR1bits.TX1IF);        
+    TXREG1 = chtr;
 }
 
 void LCDCommand(uint8_t cmd)
